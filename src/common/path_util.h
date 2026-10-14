@@ -167,4 +167,10 @@ void InitializeUserPaths(PathInitState state);
 
 [[nodiscard]] std::filesystem::path GetGlobalPath();
 
+#ifdef SHADPS4_UWP
+/// The UWP app's writable folder (LocalState); the user folder goes inside it. Set before the
+/// user paths are first used.
+void SetUwpDataRoot(const std::filesystem::path& root);
+#endif
+
 } // namespace Common::FS

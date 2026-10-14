@@ -36,4 +36,13 @@ public:
     std::unique_ptr<PortBackend> Open(PortOut& port) override;
 };
 
+#ifdef SHADPS4_UWP
+/// The UWP app's output (xaudio2_audio_out.cpp): SDL's and OpenAL's Windows drivers need desktop
+/// DLLs the Xbox does not have.
+class XAudio2AudioOut final : public AudioOutBackend {
+public:
+    std::unique_ptr<PortBackend> Open(PortOut& port) override;
+};
+#endif
+
 } // namespace Libraries::AudioOut

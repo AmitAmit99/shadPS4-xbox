@@ -125,6 +125,16 @@ static auto UserPaths = [] {
 
 static PathInitState current_init_state = PathInitState::Uninitialized;
 
+#ifdef SHADPS4_UWP
+// The app's own writable folder (LocalState). A UWP app's working directory is its read-only
+// package folder, and it has no %APPDATA%.
+static std::filesystem::path uwp_data_root;
+
+void SetUwpDataRoot(const fs::path& root) {
+    uwp_data_root = root;
+}
+#endif
+
 bool ValidatePath(const fs::path& path) {
     if (path.empty()) {
         LOG_ERROR(Common_Filesystem, "Input path is empty, path={}", PathToUTF8String(path));
@@ -185,7 +195,11 @@ const fs::path& GetUserPath(PathType shad_path) {
     }
 
     if (!IsUserPathsInitialized()) {
+#ifdef SHADPS4_UWP
+        static std::filesystem::path fallback_path = uwp_data_root / "user";
+#else
         static std::filesystem::path fallback_path = std::filesystem::current_path() / "user";
+#endif
         UserPaths.insert_or_assign(PathType::UserDir, fallback_path);
         UserPaths.insert_or_assign(PathType::LogDir, fallback_path / LOG_DIR);
         UserPaths.insert_or_assign(PathType::ScreenshotsDir, fallback_path / SCREENSHOTS_DIR);
@@ -282,11 +296,17 @@ std::optional<fs::path> FindGameByID(const fs::path& dir, const std::string& gam
 }
 
 std::filesystem::path GetPortablePath() {
+#ifdef SHADPS4_UWP
+    return uwp_data_root / PORTABLE_DIR;
+#else
     return std::filesystem::current_path() / PORTABLE_DIR;
+#endif
 }
 
 std::filesystem::path GetGlobalPath() {
-#if _WIN32
+#ifdef SHADPS4_UWP
+    return uwp_data_root / PORTABLE_DIR;
+#elif _WIN32
     TCHAR appdata[MAX_PATH] = {0};
     SHGetFolderPath(NULL, CSIDL_APPDATA, NULL, 0, appdata);
     return std::filesystem::path(appdata) / L"shadPS4";

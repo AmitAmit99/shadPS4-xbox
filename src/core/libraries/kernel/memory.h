@@ -15,6 +15,14 @@ constexpr u64 ORBIS_KERNEL_TOTAL_MEM_DEV_PRO = 7936_MB;
 constexpr u64 ORBIS_KERNEL_FLEXIBLE_MEMORY_BASE = 64_MB;
 constexpr u64 ORBIS_KERNEL_FLEXIBLE_MEMORY_SIZE = 512_MB;
 
+// The largest direct memory this build backs with host memory (committed up front).
+#ifdef SHADPS4_UWP
+// A UWP game on the Series X may use about 8 GB in all, so no devkit sizes: retail PS4 Pro at most.
+constexpr u64 HOST_BACKED_TOTAL_MEM = ORBIS_KERNEL_TOTAL_MEM_PRO;
+#else
+constexpr u64 HOST_BACKED_TOTAL_MEM = ORBIS_KERNEL_TOTAL_MEM_DEV_PRO;
+#endif
+
 namespace Core::Loader {
 class SymbolsResolver;
 }

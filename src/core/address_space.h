@@ -116,4 +116,10 @@ private:
     BackingPageTable backing_pages;
 };
 
+#ifdef SHADPS4_UWP
+/// UWP: a page the guest wants read-write-execute is writable or executable, never both. Called
+/// on an access violation; switches the page and returns true when the fault was such a page's.
+bool HandleWriteExecuteFault(VAddr address, bool execute);
+#endif
+
 } // namespace Core

@@ -8,6 +8,9 @@
 #include "core/libraries/kernel/threads/exception.h"
 #include "core/libraries/kernel/threads/pthread.h"
 #include "core/signals.h"
+#ifdef SHADPS4_UWP
+#include "core/address_space.h"
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -40,6 +43,14 @@ static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
     bool handled = false;
     switch (code) {
     case EXCEPTION_ACCESS_VIOLATION:
+#ifdef SHADPS4_UWP
+        // ExceptionInformation[0]: 0 read, 1 write, 8 execute (DEP).
+        if (HandleWriteExecuteFault(
+                static_cast<VAddr>(pExp->ExceptionRecord->ExceptionInformation[1]),
+                pExp->ExceptionRecord->ExceptionInformation[0] == 8)) {
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+#endif
         handled = signals->DispatchAccessViolation(
             pExp, reinterpret_cast<void*>(pExp->ExceptionRecord->ExceptionInformation[1]));
         break;

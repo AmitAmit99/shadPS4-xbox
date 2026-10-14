@@ -76,7 +76,20 @@ if (NOT TARGET SDL3::SDL3)
     set(SDL_TEST_LIBRARY OFF)
     set(SDL_PIPEWIRE OFF)
     set(SDL_AVX512F OFF)
+    if (SHADPS4_BUILD_UWP)
+        # As KytyPS5's Xbox build: SDL has no UWP port. The app has its own window, input and audio
+        # output; the emulator keeps SDL's string, time and thread functions. Without these subsystems
+        # SDL links only APIs UWP apps have (the rest would import desktop DLLs the Xbox lacks).
+        foreach(sdl_option VIDEO RENDER AUDIO JOYSTICK HAPTIC HIDAPI SENSOR POWER MISC FILESYSTEM LOCALE DIRECTX XINPUT WASAPI VULKAN OPENGL OPENGLES CAMERA DIALOG GPU TRAY)
+            set(SDL_${sdl_option} OFF CACHE BOOL "" FORCE)
+        endforeach()
+    endif()
     add_subdirectory(sdl3)
+    if (SHADPS4_BUILD_UWP AND TARGET SDL3-static)
+        # Without SDL's dynamic API table (SDL has no switch; it turns it off for static analysers),
+        # only the SDL code in use is linked.
+        target_compile_definitions(SDL3-static PRIVATE __INTELLISENSE__)
+    endif()
 endif()
 
 # SDL3_image

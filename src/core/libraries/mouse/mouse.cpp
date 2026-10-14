@@ -64,7 +64,8 @@ int PS4_SYSV_ABI sceMouseGetDeviceInfo() {
 
 int PS4_SYSV_ABI sceMouseInit() {
     g_are_mice_enabled = Config::IsMiceUsedAsMice();
-    if (g_are_mice_enabled) {
+    // No SDL window in the UWP app.
+    if (g_are_mice_enabled && g_window) {
         SDL_WarpMouseInWindow(g_window->GetSDLWindow(), 1, 1);
         SDL_SetWindowRelativeMouseMode(g_window->GetSDLWindow(), true);
     }

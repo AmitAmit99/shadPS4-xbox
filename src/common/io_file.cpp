@@ -302,8 +302,13 @@ uintptr_t IOFile::GetFileMapping() {
     HANDLE mapping = nullptr;
 
     if (file_access_mode == FileAccessMode::ReadWrite) {
+#ifdef SHADPS4_UWP
+        // A UWP app (Xbox Dev Mode) has only the *FromApp variant.
+        mapping = CreateFileMappingFromApp(hfile, NULL, PAGE_READWRITE | SEC_COMMIT, 0, NULL);
+#else
         mapping = CreateFileMapping2(hfile, NULL, FILE_MAP_WRITE, PAGE_READWRITE, SEC_COMMIT, 0,
                                      NULL, NULL, 0);
+#endif
     } else {
         mapping = hfile;
     }

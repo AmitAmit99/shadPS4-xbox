@@ -61,6 +61,10 @@
 #include <WinSock2.h>
 #endif
 
+#ifdef SHADPS4_UWP
+#include "uwp/uwp_host.h"
+#endif
+
 #ifndef _WIN32
 #include <sys/wait.h>
 #include <unistd.h>
@@ -333,6 +337,8 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
     LOG_INFO(Config, "Vulkan hostMarkers: {}", Config::getVkHostMarkersEnabled());
     LOG_INFO(Config, "Vulkan guestMarkers: {}", Config::getVkGuestMarkersEnabled());
     LOG_INFO(Config, "Vulkan rdocEnable: {}", Config::isRdocEnabled());
+#ifndef SHADPS4_UWP
+    // hwinfo asks WMI, which a UWP app cannot reach.
     hwinfo::Memory ram;
     hwinfo::OS os;
     const auto cpus = hwinfo::getAllCPUs();
@@ -343,6 +349,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
     }
     LOG_INFO(Config, "Total RAM: {} GB", std::round(ram.total_Bytes() / pow(1024, 3)));
     LOG_INFO(Config, "Operating System: {}", os.name());
+#endif
 
     if (param_sfo_exists) {
         LOG_INFO(Loader, "Game id: {} Title: {}", id, title);
@@ -422,6 +429,10 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
                                        Common::g_scm_branch, Common::g_scm_desc, game_title);
         }
     }
+#ifdef SHADPS4_UWP
+    // The UWP app owns the window (src/uwp); there is no SDL window, so g_window stays null.
+    LOG_INFO(Loader, "UWP app: {}", window_title);
+#else
     window = std::make_unique<Frontend::WindowSDL>(
         Config::getWindowWidth(), Config::getWindowHeight(), controllers, window_title);
 
@@ -432,6 +443,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
     } else {
         window->SetIcon({});
     }
+#endif
 
     const auto& mount_data_dir = Common::FS::GetUserPath(Common::FS::PathType::GameDataDir) / id;
     if (!std::filesystem::exists(mount_data_dir)) {
@@ -529,10 +541,14 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
 
     linker->Execute(args);
 
+#ifdef SHADPS4_UWP
+    Uwp::WaitForExitRequest();
+#else
     window->InitTimers();
     while (window->IsOpen()) {
         window->WaitEvent();
     }
+#endif
 
     UpdatePlayTime(id);
     Storage::DataBase::Instance().Close();

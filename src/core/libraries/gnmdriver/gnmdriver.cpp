@@ -2919,7 +2919,13 @@ int PS4_SYSV_ABI Func_F916890425496553() {
 void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LOG_INFO(Lib_GnmDriver, "Initializing presenter");
     liverpool = std::make_unique<AmdGpu::Liverpool>();
+#ifdef SHADPS4_UWP
+    // No Vulkan on the Xbox and no D3D12 renderer yet (XBOX_PORT.md phase 2): the GPU command
+    // processor runs without a rasterizer, and video out completes flips without presenting.
+    LOG_WARNING(Lib_GnmDriver, "UWP build: no GPU renderer yet, nothing will be drawn");
+#else
     presenter = std::make_unique<Vulkan::Presenter>(*g_window, liverpool.get());
+#endif
 
     // Auto-enable any patch shaders that exist in the patch folder
     if (Config::collectShadersForDebug() && Config::patchShaders()) {

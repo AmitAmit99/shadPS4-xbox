@@ -15,6 +15,10 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#ifdef SHADPS4_UWP
+#include <mutex>
+#include <set>
+#endif
 #else
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -58,9 +62,107 @@ static constexpr u64 SystemReservedSize = SYSTEM_RESERVED_MAX - SYSTEM_RESERVED_
 static constexpr u64 UserSize = USER_MAX - USER_MIN + 1;
 
 // Required backing file size for mapping physical address space.
-static u64 BackingSize = ORBIS_KERNEL_TOTAL_MEM_DEV_PRO + ORBIS_KERNEL_FLEXIBLE_MEMORY_SIZE;
+static u64 BackingSize = HOST_BACKED_TOTAL_MEM + ORBIS_KERNEL_FLEXIBLE_MEMORY_SIZE;
 
 #ifdef _WIN32
+
+#ifdef SHADPS4_UWP
+// A UWP app (Xbox Dev Mode) has only the *FromApp memory functions. VirtualAlloc2 and
+// MapViewOfFile3 take the same parameters as theirs; CreateFileMapping2 and VirtualProtectEx are
+// replaced where they are called.
+#define VirtualAlloc2 VirtualAlloc2FromApp
+#define MapViewOfFile3 MapViewOfFile3FromApp
+#define VirtualProtect VirtualProtectFromApp
+
+// No page of a UWP app may be writable and executable at once. Ranges the guest maps or
+// protects read-write-execute are kept writable until code runs from them, then executable until
+// something writes to them again: the fault handler switches each 4 KiB page
+// (HandleWriteExecuteFault, as KytyPS5's Xbox build does).
+namespace {
+constexpr u64 HostPageSize = 4_KB;
+
+struct WriteExecutePages {
+    std::mutex mutex;
+    std::map<VAddr, VAddr> ranges; // start -> end, not overlapping
+    std::set<VAddr> executable;    // pages of those ranges that are executable now
+
+    void Add(VAddr addr, u64 size) {
+        std::scoped_lock lk{mutex};
+        RemoveLocked(addr, size);
+        ranges.emplace(addr, addr + size);
+    }
+
+    void Remove(VAddr addr, u64 size) {
+        std::scoped_lock lk{mutex};
+        RemoveLocked(addr, size);
+    }
+
+    void RemoveLocked(VAddr addr, u64 size) {
+        const VAddr end = addr + size;
+        auto it = ranges.upper_bound(addr);
+        if (it != ranges.begin() && std::prev(it)->second > addr) {
+            --it;
+        }
+        while (it != ranges.end() && it->first < end) {
+            const auto [range_start, range_end] = *it;
+            it = ranges.erase(it);
+            if (range_start < addr) {
+                ranges.emplace(range_start, addr);
+            }
+            if (range_end > end) {
+                ranges.emplace(end, range_end);
+            }
+        }
+        executable.erase(executable.lower_bound(addr), executable.lower_bound(end));
+    }
+
+    bool Contains(VAddr addr) const {
+        auto it = ranges.upper_bound(addr);
+        return it != ranges.begin() && std::prev(it)->second > addr;
+    }
+};
+
+WriteExecutePages& WxPages() {
+    static WriteExecutePages pages;
+    return pages;
+}
+} // namespace
+
+bool HandleWriteExecuteFault(VAddr address, bool execute) {
+    auto& wx = WxPages();
+    std::scoped_lock lk{wx.mutex};
+    if (!wx.Contains(address)) {
+        return false;
+    }
+    const VAddr page = address & ~(HostPageSize - 1);
+    const bool is_executable = wx.executable.contains(page);
+    if (execute == is_executable) {
+        // Executing an executable page or writing a writable one: not ours to fix.
+        return false;
+    }
+    DWORD old_prot{};
+    if (!VirtualProtectFromApp(reinterpret_cast<void*>(page), HostPageSize,
+                               execute ? PAGE_EXECUTE_READ : PAGE_READWRITE, &old_prot)) {
+        return false;
+    }
+    if (execute) {
+        wx.executable.insert(page);
+    } else {
+        wx.executable.erase(page);
+    }
+    return true;
+}
+
+// The protection a range gets on the host: read-write-execute starts read-write and is recorded.
+static ULONG HostProtection(VAddr addr, u64 size, ULONG prot) {
+    if (prot == PAGE_EXECUTE_READWRITE || prot == PAGE_EXECUTE_WRITECOPY) {
+        WxPages().Add(addr, size);
+        return PAGE_READWRITE;
+    }
+    WxPages().Remove(addr, size);
+    return prot;
+}
+#endif
 
 [[nodiscard]] constexpr u64 ToWindowsProt(Core::MemoryProt prot) {
     const bool read =
@@ -112,6 +214,11 @@ struct AddressSpace::Impl {
 
         // Older Windows builds have a severe performance issue with VirtualAlloc2.
         // We need to get the host's Windows version, then determine if it needs a workaround.
+        RTL_OSVERSIONINFOW os_version_info{};
+#ifdef SHADPS4_UWP
+        // The Xbox's OS is newer than the affected builds; a UWP app need not ask ntdll.
+        os_version_info.dwBuildNumber = 0xFFFFFFFF;
+#else
         auto ntdll_handle = GetModuleHandleW(L"ntdll.dll");
         ASSERT_MSG(ntdll_handle, "Failed to retrieve ntdll handle");
 
@@ -121,8 +228,8 @@ struct AddressSpace::Impl {
         ASSERT_MSG(RtlGetVersion, "failed to retrieve function pointer for RtlGetVersion");
 
         // Call RtlGetVersion
-        RTL_OSVERSIONINFOW os_version_info{};
         RtlGetVersion(&os_version_info);
+#endif
 
         u64 supported_user_max = USER_MAX;
         // This is the build number for Windows 11 22H2
@@ -193,9 +300,18 @@ struct AddressSpace::Impl {
         BackingSize += Config::getExtraDmemInMbytes() * 1_MB;
 
         // Allocate backing file that represents the total physical memory.
+#ifdef SHADPS4_UWP
+        // Views of it are never mapped read-write-execute (HostProtection); this is only the
+        // section's maximum protection, as in KytyPS5's Xbox build.
+        backing_handle = CreateFileMappingFromApp(INVALID_HANDLE_VALUE, nullptr,
+                                                  PAGE_EXECUTE_READWRITE | SEC_COMMIT, BackingSize,
+                                                  nullptr);
+        LOG_INFO(Core, "UWP: backing memory {} MB", BackingSize / 1_MB);
+#else
         backing_handle = CreateFileMapping2(INVALID_HANDLE_VALUE, nullptr, FILE_MAP_ALL_ACCESS,
                                             PAGE_EXECUTE_READWRITE, SEC_COMMIT, BackingSize,
                                             nullptr, nullptr, 0);
+#endif
 
         ASSERT_MSG(backing_handle, "{}", Common::GetLastErrorMsg());
         // Allocate a virtual memory for the backing file map as placeholder
@@ -205,9 +321,14 @@ struct AddressSpace::Impl {
         ASSERT_MSG(backing_base, "{}", Common::GetLastErrorMsg());
 
         // Map backing placeholder. This will commit the pages
-        void* const ret =
-            MapViewOfFile3(backing_handle, process, backing_base, 0, BackingSize,
-                           MEM_REPLACE_PLACEHOLDER, PAGE_EXECUTE_READWRITE, nullptr, 0);
+#ifdef SHADPS4_UWP
+        // The emulator's own view of physical memory is never executed.
+        constexpr ULONG backing_view_prot = PAGE_READWRITE;
+#else
+        constexpr ULONG backing_view_prot = PAGE_EXECUTE_READWRITE;
+#endif
+        void* const ret = MapViewOfFile3(backing_handle, process, backing_base, 0, BackingSize,
+                                         MEM_REPLACE_PLACEHOLDER, backing_view_prot, nullptr, 0);
         ASSERT_MSG(ret == backing_base, "{}", Common::GetLastErrorMsg());
     }
 
@@ -234,7 +355,11 @@ struct AddressSpace::Impl {
         VAddr virtual_addr = region->base;
         PAddr phys_addr = region->phys_base;
         u64 size = region->size;
+#ifdef SHADPS4_UWP
+        ULONG prot = HostProtection(virtual_addr, size, region->prot);
+#else
         ULONG prot = region->prot;
+#endif
         s32 fd = region->fd;
 
         void* ptr = nullptr;
@@ -296,6 +421,9 @@ struct AddressSpace::Impl {
         u64 size = region->size;
         ULONG prot = region->prot;
         s32 fd = region->fd;
+#ifdef SHADPS4_UWP
+        WxPages().Remove(virtual_addr, size);
+#endif
 
         bool ret = false;
         if ((fd != -1 && prot != PAGE_READONLY) || (fd == -1 && phys_base != -1)) {
@@ -556,7 +684,12 @@ struct AddressSpace::Impl {
             const u64 range_addr = std::max(region.base, virtual_addr);
             const u64 range_size = std::min(region.base + region.size, virtual_end) - range_addr;
             DWORD old_flags{};
+#ifdef SHADPS4_UWP
+            const ULONG host_flags = HostProtection(range_addr, range_size, new_flags);
+            if (!VirtualProtectFromApp(LPVOID(range_addr), range_size, host_flags, &old_flags)) {
+#else
             if (!VirtualProtectEx(process, LPVOID(range_addr), range_size, new_flags, &old_flags)) {
+#endif
                 LOG_ERROR(Core,
                           "Protect: VirtualProtectEx failed for address {:#x}, size {:#x} "
                           "(error {}) -- skipping this sub-range instead of aborting",

@@ -40,6 +40,13 @@ option(ENABLE_QT_GUI "Enable the Qt GUI. If not selected then the emulator uses 
 option(ENABLE_DISCORD_RPC "Enable the Discord RPC integration" ON)
 option(ENABLE_UPDATER "Enables the options to updater" ON)
 option(ENABLE_TESTS "Build unit tests (requires GTest)" OFF)
+# The UWP app for Xbox Dev Mode (XBOX_PORT.md). Its own window, input and audio replace SDL's; no Qt.
+option(SHADPS4_BUILD_UWP "Build the UWP app for Xbox Dev Mode" OFF)
+if (SHADPS4_BUILD_UWP)
+    set(ENABLE_QT_GUI OFF CACHE BOOL "" FORCE)
+    set(ENABLE_DISCORD_RPC OFF CACHE BOOL "" FORCE)
+    set(ENABLE_UPDATER OFF CACHE BOOL "" FORCE)
+endif()
 
 # First, determine whether to use CMAKE_OSX_ARCHITECTURES or CMAKE_SYSTEM_PROCESSOR.
 if (APPLE AND CMAKE_OSX_ARCHITECTURES)
@@ -1412,6 +1419,33 @@ if (ENABLE_QT_GUI)
         ${EMULATOR}
         src/images/shadPS4.icns
     )
+elseif (SHADPS4_BUILD_UWP)
+    # The app's entry point replaces main.cpp. sdl_window.cpp stays compiled (other code names
+    # WindowSDL) but the app never creates one.
+    add_executable(shadps4 WIN32
+        ${AUDIO_CORE}
+        ${IMGUI}
+        ${INPUT}
+        ${COMMON}
+        ${CORE}
+        ${SHADER_RECOMPILER}
+        ${VIDEO_CORE}
+        ${EMULATOR}
+        src/emulator.cpp
+        src/emulator.h
+        src/sdl_window.h
+        src/sdl_window.cpp
+        src/uwp/uwp_app.cpp
+        src/uwp/uwp_desktop_shims.cpp
+        src/uwp/uwp_files.cpp
+        src/uwp/uwp_host.cpp
+        src/uwp/uwp_host.h
+        src/core/libraries/audio/xaudio2_audio_out.cpp
+    )
+    # UWP apps use the store C++ runtime (vcruntime140_app.dll from the VCLibs framework package)
+    # and the WindowsApp umbrella library, which comes before the desktop system libraries.
+    # Whatever is still taken from a desktop DLL is found by tools/uwp-import-check.ps1.
+    target_link_libraries(shadps4 PRIVATE WindowsApp.lib xaudio2.lib)
 else()
     add_executable(shadps4
         ${AUDIO_CORE}
@@ -1438,6 +1472,11 @@ target_link_libraries(shadps4 PRIVATE stb::headers libusb::usb lfreist-hwinfo::h
 
 target_compile_definitions(shadps4 PRIVATE IMGUI_USER_CONFIG="imgui/imgui_config.h")
 target_compile_definitions(Dear_ImGui PRIVATE IMGUI_USER_CONFIG="${PROJECT_SOURCE_DIR}/src/imgui/imgui_config.h")
+if (SHADPS4_BUILD_UWP)
+    # imgui's Windows clipboard, IME and shell functions call desktop DLLs.
+    target_compile_definitions(Dear_ImGui PRIVATE IMGUI_DISABLE_WIN32_DEFAULT_CLIPBOARD_FUNCTIONS
+        IMGUI_DISABLE_WIN32_DEFAULT_IME_FUNCTIONS IMGUI_DISABLE_DEFAULT_SHELL_FUNCTIONS)
+endif()
 
 target_link_libraries(shadps4 PRIVATE libprotobuf)
 
@@ -1546,6 +1585,22 @@ endif()
 
 if (WIN32)
     target_sources(shadps4 PRIVATE src/shadps4.rc)
+endif()
+
+if (SHADPS4_BUILD_UWP)
+    target_compile_definitions(shadps4 PRIVATE SHADPS4_UWP)
+    # C++/WinRT (the SDK's headers) reports errors as exceptions.
+    set_source_files_properties(src/uwp/uwp_app.cpp src/uwp/uwp_host.cpp PROPERTIES COMPILE_OPTIONS "/EHsc")
+    target_link_options(shadps4 PRIVATE "/APPCONTAINER" "/LIBPATH:$ENV{VCToolsInstallDir}lib/x64/store")
+
+    # The package layout next to the executable, updated after every link (tools/uwp-package.ps1
+    # packs it into an .msix for the Xbox).
+    set(SHADPS4_UWP_LAYOUT "${CMAKE_BINARY_DIR}/uwp-layout")
+    add_custom_command(TARGET shadps4 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADPS4_UWP_LAYOUT}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:shadps4> "${SHADPS4_UWP_LAYOUT}/"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/src/uwp/AppxManifest.xml" "${SHADPS4_UWP_LAYOUT}/"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/src/uwp/Assets" "${SHADPS4_UWP_LAYOUT}/Assets")
 endif()
 
 if (NOT MSVC)

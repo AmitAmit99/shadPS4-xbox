@@ -215,11 +215,15 @@ s32 PS4_SYSV_ABI sceAudioOutInit() {
         return ORBIS_AUDIO_OUT_ERROR_ALREADY_INIT;
     }
 
+#ifdef SHADPS4_UWP
+    audio = std::make_unique<XAudio2AudioOut>();
+#else
     if (Config::getAudioBackend() == Config::AudioBackend::OpenAL) {
         audio = std::make_unique<OpenALAudioOut>();
     } else {
         audio = std::make_unique<SDLAudioOut>();
     }
+#endif
     LOG_INFO(Lib_AudioOut, "Audio system initialized");
     return ORBIS_OK;
 }

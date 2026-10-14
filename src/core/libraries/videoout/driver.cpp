@@ -171,7 +171,10 @@ int VideoOutDriver::RegisterBuffers(VideoOutPort* port, s32 startIndex, void* co
         port->buffer_labels[startIndex + i] = 0;
         port->SignalVoLabel();
 
-        presenter->RegisterVideoOutSurface(group, address);
+        // No presenter in a build without a GPU renderer (the UWP app, XBOX_PORT.md).
+        if (presenter) {
+            presenter->RegisterVideoOutSurface(group, address);
+        }
         LOG_INFO(Lib_VideoOut, "buffers[{}] = {:#x}", i + startIndex, address);
     }
 
@@ -236,11 +239,13 @@ int VideoOutDriver::ChangeBufferAttribute(VideoOutPort* port, s32 attributeIndex
 }
 
 void VideoOutDriver::Flip(const Request& req) {
-    // Update HDR status before presenting.
-    presenter->SetHDR(req.port->is_hdr);
+    if (presenter) {
+        // Update HDR status before presenting.
+        presenter->SetHDR(req.port->is_hdr);
 
-    // Present the frame.
-    presenter->Present(req.frame);
+        // Present the frame.
+        presenter->Present(req.frame);
+    }
 
     // Update flip status.
     auto* port = req.port;
@@ -289,11 +294,17 @@ void VideoOutDriver::Flip(const Request& req) {
 }
 
 void VideoOutDriver::DrawBlankFrame() {
+    if (!presenter) {
+        return;
+    }
     const auto empty_frame = presenter->PrepareBlankFrame(true);
     presenter->Present(empty_frame, false, false);
 }
 
 void VideoOutDriver::DrawLastFrame() {
+    if (!presenter) {
+        return;
+    }
     const auto frame = presenter->PrepareLastFrame();
     if (frame != nullptr) {
         presenter->Present(frame, true);
@@ -327,8 +338,10 @@ bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
 }
 
 void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_arg, bool is_eop) {
-    Vulkan::Frame* frame;
-    if (index == -1) {
+    Vulkan::Frame* frame = nullptr;
+    if (!presenter) {
+        // No GPU renderer: the flip still completes (Flip skips presenting).
+    } else if (index == -1) {
         frame = presenter->PrepareBlankFrame(false);
     } else {
         const auto& buffer = port->buffer_slots[index];
