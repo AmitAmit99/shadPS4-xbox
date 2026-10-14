@@ -2,7 +2,7 @@
 SPDX-FileCopyrightText: 2024 shadPS4 Emulator Project
 SPDX-License-Identifier: GPL-2.0-or-later
 -->
-Discord server for talking about forks. https://discord.gg/jgpqB7gUxG 
+Discord server for talking about forks. https://discord.gg/jgpqB7gUxG (the windows one)
 
 NEW GUI reworked + Cinema mode (netflix style) BigPicture and Gamehub modes if the QT gui is not of your liking
 
